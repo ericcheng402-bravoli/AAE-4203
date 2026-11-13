@@ -1,0 +1,36 @@
+import numpy as np
+
+C = 299792458.0  # speed of light [m/s]
+
+def load(f):
+    # header=None: the first line is data (one satellite), not column names
+    return np.loadtxt(f, delimiter=",")
+
+P   = load("pseudoranges_meas.csv")      # (n_sat, n_epoch)  [m]
+Ion = load("ionospheric_delay.csv")      # (n_sat, n_epoch)  [m]
+Trp = load("tropospheric_delay.csv")     # (n_sat, n_epoch)  [m]
+Clk = load("satellite_clock_bias.csv")   # (n_sat, n_epoch)  [m]  (if in seconds: Clk *= C)
+S   = load("satellite_positions.csv")    # (n_sat, 3*n_epoch) ECEF [m], x,y,z per epoch
+n_sat, n_ep = P.shape
+S = S.reshape(n_sat, n_ep, 3)
+
+# corrected pseudorange: remove atmospheric delays, add satellite clock correction
+Pc = P - Ion - Trp + Clk
+
+def spp(sat, rho, iters=10, tol=1e-4):
+    """sat: (n,3) satellite ECEF, rho: (n,) corrected pseudoranges.
+    Returns [x, y, z, receiver clock bias in metres]."""
+    x = np.zeros(4)                                   # start at Earth centre, clock = 0
+    for _ in range(iters):
+        d = sat - x[:3]
+        r = np.linalg.norm(d, axis=1)
+        H = np.hstack([-d / r[:, None], np.ones((len(r), 1))])   # geometry matrix
+        dy = rho - (r + x[3])                                    # prefit residuals
+        dx, *_ = np.linalg.lstsq(H, dy, rcond=None)              # dx = (HᵀH)⁻¹Hᵀdy
+        x += dx
+        if np.linalg.norm(dx) < tol:
+            break
+    return x
+
+sol = np.array([spp(S[:, k, :], Pc[:, k]) for k in range(n_ep)])
+print(sol[:5])      # [x, y, z, c*dt_r] for the first epochs
